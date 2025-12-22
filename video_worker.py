@@ -17,6 +17,22 @@ def load_model_for_age(cfg: AppConfig, umur_hari: int) -> YOLO:
     return YOLO(path)
 
 
+def build_csi_gstreamer_pipeline(width=1920, height=1080, fps=30, flip_method=0) -> str:
+    """
+    Pipeline CSI Jetson -> OpenCV (CPU BGR).
+    NOTE: format NV12 + memory:NVMM is important for Argus.
+    """
+    return (
+        "nvarguscamerasrc ! "
+        f"video/x-raw(memory:NVMM), width={width}, height={height}, framerate={fps}/1, format=NV12 ! "
+        f"nvvidconv flip-method={flip_method} ! "
+        "video/x-raw, format=BGRx ! "
+        "videoconvert ! "
+        "video/x-raw, format=BGR ! "
+        "appsink drop=true max-buffers=1 sync=false"
+    )
+
+
 class VideoWorker(QtCore.QThread):
     frame_updated = QtCore.pyqtSignal(QtGui.QImage)
     log_signal = QtCore.pyqtSignal(str)
@@ -27,6 +43,7 @@ class VideoWorker(QtCore.QThread):
         self.cfg = cfg
         self.model = model
         self.tg = tg
+
         self.running = False
 
         self.threshold = {"n": 0, "p": 0, "k": 0}
@@ -37,10 +54,71 @@ class VideoWorker(QtCore.QThread):
 
         self.last_annotated_bgr = None
 
+        # Camera settings (override via cfg if you want)
+        self.cam_width = getattr(cfg, "CAM_WIDTH", 1920)
+        self.cam_height = getattr(cfg, "CAM_HEIGHT", 1080)
+        self.cam_fps = getattr(cfg, "CAM_FPS", 30)
+        self.csi_flip_method = getattr(cfg, "CSI_FLIP_METHOD", 0)
+
+        # Keep your old behavior (mirror)
+        self.mirror = getattr(cfg, "CAM_MIRROR", True)
+
+        # Fallback behavior
+        self.use_usb_fallback = getattr(cfg, "USE_USB_FALLBACK", False)
+        self.usb_index = getattr(cfg, "USB_CAM_INDEX", 0)
+
+        # Robustness
+        self.max_consecutive_read_fail = getattr(cfg, "CAM_MAX_READ_FAIL", 60)  # ~2s if sleep 0.03
+        self.read_fail_count = 0
+
     def _log(self, msg: str):
         self.log_signal.emit(msg)
 
+    def _open_csi(self):
+        pipeline = build_csi_gstreamer_pipeline(
+            width=self.cam_width,
+            height=self.cam_height,
+            fps=self.cam_fps,
+            flip_method=self.csi_flip_method,
+        )
+        cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+        return cap if cap.isOpened() else None
+
+    def _open_usb(self):
+        cap = cv2.VideoCapture(int(self.usb_index), cv2.CAP_V4L2)
+        return cap if cap.isOpened() else None
+
+    def _open_camera(self):
+        # Prefer CSI always
+        cap = self._open_csi()
+        if cap is not None:
+            self._log(f"[CAM] CSI opened: {self.cam_width}x{self.cam_height}@{self.cam_fps} (flip={self.csi_flip_method})")
+            return cap, "csi"
+
+        self._log("[CAM] CSI open failed.")
+        if self.use_usb_fallback:
+            cap = self._open_usb()
+            if cap is not None:
+                self._log(f"[CAM] USB opened: index={self.usb_index}")
+                return cap, "usb"
+            self._log("[CAM] USB fallback failed too.")
+
+        return None, "none"
+
+    def _restart_argus(self):
+        # optional: try restarting nvargus daemon if CSI becomes unstable
+        # requires sudo without password OR run app as user with sudo rights.
+        # If you don't want this, comment out call sites.
+        try:
+            import subprocess
+            self._log("[CAM] Restarting nvargus-daemon...")
+            subprocess.run(["sudo", "systemctl", "restart", "nvargus-daemon"], check=False)
+            time.sleep(1.0)
+        except Exception as e:
+            self._log(f"[CAM] Restart nvargus-daemon failed: {e}")
+
     def run(self):
+        # Load DB thresholds
         try:
             self.threshold = get_threshold(self.cfg, self.cfg.DEVICE_ID)
             self._log(f"[DB] Threshold loaded: {self.threshold}")
@@ -54,17 +132,47 @@ class VideoWorker(QtCore.QThread):
             f"TG={self.cfg.telegram_enabled()} (CD={self.cfg.TG_COOLDOWN_SEC}s)"
         )
 
-        cap = cv2.VideoCapture(0)
+        cap, cam_type = self._open_camera()
+        if cap is None:
+            self._log("[CAM] ERROR: cannot open camera.")
+            self.alert_signal.emit(False)
+            return
+
         self.running = True
         self.alert_signal.emit(False)
+        self.read_fail_count = 0
 
         while self.running:
             ret, frame = cap.read()
-            if not ret:
+
+            if (not ret) or (frame is None):
+                self.read_fail_count += 1
+                if self.read_fail_count % 30 == 0:
+                    self._log(f"[CAM] read() failed x{self.read_fail_count}")
+
+                if self.read_fail_count >= self.max_consecutive_read_fail:
+                    self._log("[CAM] Too many read failures -> reopening camera.")
+                    cap.release()
+
+                    # Try to recover CSI by restarting Argus (optional)
+                    if cam_type == "csi":
+                        self._restart_argus()
+
+                    cap, cam_type = self._open_camera()
+                    if cap is None:
+                        self._log("[CAM] Reopen failed. Stopping worker.")
+                        break
+                    self.read_fail_count = 0
+
+                time.sleep(0.03)
                 continue
 
-            frame = cv2.flip(frame, 1)
+            self.read_fail_count = 0
 
+            if self.mirror:
+                frame = cv2.flip(frame, 1)
+
+            # YOLO inference
             results = self.model.predict(frame, verbose=False)
             r0 = results[0]
             annotated = r0.plot()
@@ -144,13 +252,17 @@ class VideoWorker(QtCore.QThread):
                     self.dead_hits = 0
                     self.alert_signal.emit(False)
 
-            # send frame to UI
+            # send frame to UI (Qt needs RGB)
             rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb.shape
             img_qt = QtGui.QImage(rgb.data, w, h, ch * w, QtGui.QImage.Format_RGB888)
             self.frame_updated.emit(img_qt)
 
-        cap.release()
+        try:
+            cap.release()
+        except Exception:
+            pass
+        self._log(f"[CAM] Released ({cam_type}).")
 
     def stop(self):
         self.running = False
