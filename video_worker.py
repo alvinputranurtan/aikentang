@@ -19,10 +19,6 @@ def load_model_for_age(cfg: AppConfig, umur_hari: int) -> YOLO:
 
 
 def build_csi_gstreamer_pipeline(width=1920, height=1080, fps=30, flip_method=0) -> str:
-    """
-    Pipeline CSI Jetson -> OpenCV (CPU BGR).
-    NOTE: format NV12 + memory:NVMM is important for Argus.
-    """
     return (
         "nvarguscamerasrc ! "
         f"video/x-raw(memory:NVMM), width={width}, height={height}, framerate={fps}/1, format=NV12 ! "
@@ -32,6 +28,27 @@ def build_csi_gstreamer_pipeline(width=1920, height=1080, fps=30, flip_method=0)
         "video/x-raw, format=BGR ! "
         "appsink drop=true max-buffers=1 sync=false"
     )
+
+
+def _draw_label_box(img, xyxy, label, conf):
+    """
+    Draw a simple labeled box.
+    NOTE: We avoid fixed fancy colors; use a deterministic color derived from label.
+    """
+    x1, y1, x2, y2 = [int(v) for v in xyxy]
+    # deterministic "color" from label
+    h = abs(hash(label)) % 255
+    color = (h, 255 - h, (h * 2) % 255)
+
+    cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+
+    text = f"{label} {conf:.2f}"
+    (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+    y_text = max(0, y1 - th - 8)
+
+    cv2.rectangle(img, (x1, y_text), (x1 + tw + 10, y_text + th + 8), color, -1)
+    cv2.putText(img, text, (x1 + 5, y_text + th + 3),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2, cv2.LINE_AA)
 
 
 class VideoWorker(QtCore.QThread):
@@ -57,24 +74,20 @@ class VideoWorker(QtCore.QThread):
 
         self.last_annotated_bgr = None
 
-        # Camera settings (override via cfg if you want)
+        # Camera settings
         self.cam_width = getattr(cfg, "CAM_WIDTH", 1920)
         self.cam_height = getattr(cfg, "CAM_HEIGHT", 1080)
         self.cam_fps = getattr(cfg, "CAM_FPS", 30)
         self.csi_flip_method = getattr(cfg, "CSI_FLIP_METHOD", 0)
 
-        # Keep your old behavior (mirror)
         self.mirror = getattr(cfg, "CAM_MIRROR", True)
 
-        # Fallback behavior
         self.use_usb_fallback = getattr(cfg, "USE_USB_FALLBACK", False)
         self.usb_index = getattr(cfg, "USB_CAM_INDEX", 0)
 
-        # Robustness
-        self.max_consecutive_read_fail = getattr(cfg, "CAM_MAX_READ_FAIL", 60)  # ~2s if sleep 0.03
+        self.max_consecutive_read_fail = getattr(cfg, "CAM_MAX_READ_FAIL", 60)
         self.read_fail_count = 0
 
-        # track last UI status to avoid spamming
         self._last_status_sent = None
 
     def _log(self, msg: str):
@@ -102,10 +115,7 @@ class VideoWorker(QtCore.QThread):
     def _open_camera(self):
         cap = self._open_csi()
         if cap is not None:
-            self._log(
-                f"[CAM] CSI opened: {self.cam_width}x{self.cam_height}@{self.cam_fps} "
-                f"(flip={self.csi_flip_method})"
-            )
+            self._log(f"[CAM] CSI opened: {self.cam_width}x{self.cam_height}@{self.cam_fps} (flip={self.csi_flip_method})")
             return cap, "csi"
 
         self._log("[CAM] CSI open failed.")
@@ -115,7 +125,6 @@ class VideoWorker(QtCore.QThread):
                 self._log(f"[CAM] USB opened: index={self.usb_index}")
                 return cap, "usb"
             self._log("[CAM] USB fallback failed too.")
-
         return None, "none"
 
     def _restart_argus(self):
@@ -154,7 +163,6 @@ class VideoWorker(QtCore.QThread):
 
         while self.running:
             ret, frame = cap.read()
-
             if (not ret) or (frame is None):
                 self.read_fail_count += 1
                 if self.read_fail_count % 30 == 0:
@@ -163,10 +171,8 @@ class VideoWorker(QtCore.QThread):
                 if self.read_fail_count >= self.max_consecutive_read_fail:
                     self._log("[CAM] Too many read failures -> reopening camera.")
                     cap.release()
-
                     if cam_type == "csi":
                         self._restart_argus()
-
                     cap, cam_type = self._open_camera()
                     if cap is None:
                         self._log("[CAM] Reopen failed. Stopping worker.")
@@ -184,8 +190,9 @@ class VideoWorker(QtCore.QThread):
             # YOLO inference
             results = self.model.predict(frame, verbose=False)
             r0 = results[0]
-            annotated = r0.plot()
-            self.last_annotated_bgr = annotated
+
+            # Start annotated as a copy of the frame
+            annotated = frame.copy()
 
             # ---- detect "no plant" ----
             has_boxes = (r0.boxes is not None) and (len(r0.boxes) > 0)
@@ -193,26 +200,37 @@ class VideoWorker(QtCore.QThread):
                 self._emit_status("no_plant")
                 self.dead_hits = max(0, self.dead_hits - 1)
 
+                self.last_annotated_bgr = annotated
                 rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
                 h, w, ch = rgb.shape
                 img_qt = QtGui.QImage(rgb.data, w, h, ch * w, QtGui.QImage.Format_RGB888)
                 self.frame_updated.emit(img_qt)
-
                 time.sleep(0.01)
                 continue
 
-            # ---- detect dead (UI label: MALNUTRISI) ----
+            # Draw boxes manually, and rename "dead" -> "malnutrisi" on overlay
+            cls_ids = r0.boxes.cls.cpu().numpy().astype(int)
+            confs = r0.boxes.conf.cpu().numpy()
+            xyxys = r0.boxes.xyxy.cpu().numpy()
+
             dead_detected = False
             best_dead_conf = 0.0
 
-            cls_ids = r0.boxes.cls.cpu().numpy().astype(int)
-            confs = r0.boxes.conf.cpu().numpy()
-            for cid, cf in zip(cls_ids, confs):
+            for cid, cf, xyxy in zip(cls_ids, confs, xyxys):
                 name = self.model.names.get(int(cid), str(cid))
                 cf = float(cf)
+
+                overlay_label = name
+                if name == self.cfg.DEAD_CLASS_NAME:
+                    overlay_label = "malnutrisi"  # ✅ change label in video overlay
+
+                _draw_label_box(annotated, xyxy, overlay_label, cf)
+
                 if name == self.cfg.DEAD_CLASS_NAME and cf >= self.cfg.DEAD_CONF:
                     dead_detected = True
                     best_dead_conf = max(best_dead_conf, cf)
+
+            self.last_annotated_bgr = annotated
 
             now = time.time()
             if dead_detected:
@@ -252,8 +270,8 @@ class VideoWorker(QtCore.QThread):
                         queued = self.tg.enqueue_photo(buf.tobytes(), caption)
                         self._log("[TG] queued snapshot" if queued else "[TG] queue full, skip")
 
-            # if not malnutrisi state, and plants exist, set normal
-            if not self.dead_state and has_boxes:
+            # if not malnutrisi state and plants exist -> normal
+            if not self.dead_state:
                 self._emit_status("normal")
 
             # MALNUTRISI -> RECOVER trigger
@@ -287,8 +305,6 @@ class VideoWorker(QtCore.QThread):
         except Exception:
             pass
         self._log(f"[CAM] Released ({cam_type}).")
-
-        # when thread ends, tell UI stopped
         self._emit_status("stopped")
 
     def stop(self):
