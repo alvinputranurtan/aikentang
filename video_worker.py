@@ -1,3 +1,4 @@
+# video_worker.py
 import time
 import os
 import cv2
@@ -36,7 +37,9 @@ def build_csi_gstreamer_pipeline(width=1920, height=1080, fps=30, flip_method=0)
 class VideoWorker(QtCore.QThread):
     frame_updated = QtCore.pyqtSignal(QtGui.QImage)
     log_signal = QtCore.pyqtSignal(str)
-    alert_signal = QtCore.pyqtSignal(bool)  # True=ALERT
+
+    # UI status: "stopped" | "normal" | "malnutrisi" | "no_plant"
+    status_signal = QtCore.pyqtSignal(str)
 
     def __init__(self, cfg: AppConfig, model: YOLO, tg: TelegramSender):
         super().__init__()
@@ -71,8 +74,16 @@ class VideoWorker(QtCore.QThread):
         self.max_consecutive_read_fail = getattr(cfg, "CAM_MAX_READ_FAIL", 60)  # ~2s if sleep 0.03
         self.read_fail_count = 0
 
+        # track last UI status to avoid spamming
+        self._last_status_sent = None
+
     def _log(self, msg: str):
         self.log_signal.emit(msg)
+
+    def _emit_status(self, status: str):
+        if status != self._last_status_sent:
+            self.status_signal.emit(status)
+            self._last_status_sent = status
 
     def _open_csi(self):
         pipeline = build_csi_gstreamer_pipeline(
@@ -89,10 +100,12 @@ class VideoWorker(QtCore.QThread):
         return cap if cap.isOpened() else None
 
     def _open_camera(self):
-        # Prefer CSI always
         cap = self._open_csi()
         if cap is not None:
-            self._log(f"[CAM] CSI opened: {self.cam_width}x{self.cam_height}@{self.cam_fps} (flip={self.csi_flip_method})")
+            self._log(
+                f"[CAM] CSI opened: {self.cam_width}x{self.cam_height}@{self.cam_fps} "
+                f"(flip={self.csi_flip_method})"
+            )
             return cap, "csi"
 
         self._log("[CAM] CSI open failed.")
@@ -106,9 +119,6 @@ class VideoWorker(QtCore.QThread):
         return None, "none"
 
     def _restart_argus(self):
-        # optional: try restarting nvargus daemon if CSI becomes unstable
-        # requires sudo without password OR run app as user with sudo rights.
-        # If you don't want this, comment out call sites.
         try:
             import subprocess
             self._log("[CAM] Restarting nvargus-daemon...")
@@ -135,11 +145,11 @@ class VideoWorker(QtCore.QThread):
         cap, cam_type = self._open_camera()
         if cap is None:
             self._log("[CAM] ERROR: cannot open camera.")
-            self.alert_signal.emit(False)
+            self._emit_status("no_plant")
             return
 
         self.running = True
-        self.alert_signal.emit(False)
+        self._emit_status("normal")
         self.read_fail_count = 0
 
         while self.running:
@@ -154,7 +164,6 @@ class VideoWorker(QtCore.QThread):
                     self._log("[CAM] Too many read failures -> reopening camera.")
                     cap.release()
 
-                    # Try to recover CSI by restarting Argus (optional)
                     if cam_type == "csi":
                         self._restart_argus()
 
@@ -178,19 +187,32 @@ class VideoWorker(QtCore.QThread):
             annotated = r0.plot()
             self.last_annotated_bgr = annotated
 
-            # ---- detect dead ----
+            # ---- detect "no plant" ----
+            has_boxes = (r0.boxes is not None) and (len(r0.boxes) > 0)
+            if not has_boxes:
+                self._emit_status("no_plant")
+                self.dead_hits = max(0, self.dead_hits - 1)
+
+                rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
+                h, w, ch = rgb.shape
+                img_qt = QtGui.QImage(rgb.data, w, h, ch * w, QtGui.QImage.Format_RGB888)
+                self.frame_updated.emit(img_qt)
+
+                time.sleep(0.01)
+                continue
+
+            # ---- detect dead (UI label: MALNUTRISI) ----
             dead_detected = False
             best_dead_conf = 0.0
 
-            if r0.boxes is not None and len(r0.boxes) > 0:
-                cls_ids = r0.boxes.cls.cpu().numpy().astype(int)
-                confs = r0.boxes.conf.cpu().numpy()
-                for cid, cf in zip(cls_ids, confs):
-                    name = self.model.names.get(int(cid), str(cid))
-                    cf = float(cf)
-                    if name == self.cfg.DEAD_CLASS_NAME and cf >= self.cfg.DEAD_CONF:
-                        dead_detected = True
-                        best_dead_conf = max(best_dead_conf, cf)
+            cls_ids = r0.boxes.cls.cpu().numpy().astype(int)
+            confs = r0.boxes.conf.cpu().numpy()
+            for cid, cf in zip(cls_ids, confs):
+                name = self.model.names.get(int(cid), str(cid))
+                cf = float(cf)
+                if name == self.cfg.DEAD_CLASS_NAME and cf >= self.cfg.DEAD_CONF:
+                    dead_detected = True
+                    best_dead_conf = max(best_dead_conf, cf)
 
             now = time.time()
             if dead_detected:
@@ -202,28 +224,26 @@ class VideoWorker(QtCore.QThread):
             else:
                 self.dead_hits = max(0, self.dead_hits - 1)
 
-            # NORMAL -> DEAD trigger
+            # NORMAL -> MALNUTRISI trigger
             if (not self.dead_state) and (self.dead_hits >= self.cfg.DEAD_HITS_REQUIRED):
                 self.dead_state = True
-                self.alert_signal.emit(True)
+                self._emit_status("malnutrisi")
 
-                # DB set 0
                 if (now - self.last_db_update_ts) >= self.cfg.DB_COOLDOWN_SEC:
                     try:
                         affected = set_current(self.cfg, self.cfg.DEVICE_ID, 0, 0, 0)
-                        self._log(f"[DB] DEAD -> set current=0 (affected={affected})")
+                        self._log(f"[DB] MALNUTRISI(trigger by DEAD) -> set current=0 (affected={affected})")
                         self.last_db_update_ts = now
                     except Exception as e:
                         self._log(f"[DB] ERROR set current=0: {e}")
 
-                # Telegram snapshot (non-blocking)
                 if self.cfg.telegram_enabled() and self.last_annotated_bgr is not None:
                     ts = time.strftime("%Y-%m-%d %H:%M:%S")
                     caption = (
-                        f"⚠️ DETEKSI DEAD\n"
+                        f"⚠️ DETEKSI MALNUTRISI\n"
                         f"Waktu: {ts}\n"
                         f"Device ID: {self.cfg.DEVICE_ID}\n"
-                        f"dead_hits: {self.dead_hits}\n"
+                        f"hits: {self.dead_hits}\n"
                         f"conf_best: {best_dead_conf:.2f}\n"
                         f"Action: set current=0"
                     )
@@ -232,7 +252,11 @@ class VideoWorker(QtCore.QThread):
                         queued = self.tg.enqueue_photo(buf.tobytes(), caption)
                         self._log("[TG] queued snapshot" if queued else "[TG] queue full, skip")
 
-            # DEAD -> RECOVER trigger
+            # if not malnutrisi state, and plants exist, set normal
+            if not self.dead_state and has_boxes:
+                self._emit_status("normal")
+
+            # MALNUTRISI -> RECOVER trigger
             if self.dead_state:
                 no_dead_sec = now - self.last_dead_seen_ts
                 if no_dead_sec >= self.cfg.RECOVER_AFTER_SEC:
@@ -250,9 +274,9 @@ class VideoWorker(QtCore.QThread):
 
                     self.dead_state = False
                     self.dead_hits = 0
-                    self.alert_signal.emit(False)
+                    self._emit_status("normal")
 
-            # send frame to UI (Qt needs RGB)
+            # send frame to UI
             rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb.shape
             img_qt = QtGui.QImage(rgb.data, w, h, ch * w, QtGui.QImage.Format_RGB888)
@@ -263,6 +287,9 @@ class VideoWorker(QtCore.QThread):
         except Exception:
             pass
         self._log(f"[CAM] Released ({cam_type}).")
+
+        # when thread ends, tell UI stopped
+        self._emit_status("stopped")
 
     def stop(self):
         self.running = False

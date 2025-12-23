@@ -1,3 +1,4 @@
+# ui_widgets.py
 from PyQt5 import QtWidgets, QtGui, QtCore
 
 
@@ -66,7 +67,35 @@ class StatusPanel(QtWidgets.QFrame):
 
         layout.addStretch(1)
 
-        self.set_normal()
+        self.set_stopped()
+
+    def set_stopped(self):
+        self.badge.setText("⏹️  MODEL BERHENTI")
+        self.badge.setStyleSheet("""
+            QLabel {
+                font-size: 28px;
+                font-weight: 900;
+                padding: 18px;
+                border-radius: 16px;
+                background: #e5e7eb;
+                color: #111827;
+            }
+        """)
+        self.detail.setStyleSheet("""
+            QLabel {
+                font-size: 18px;
+                font-weight: 800;
+                color: #111827;
+                line-height: 1.7;
+            }
+        """)
+        self.detail.setText(
+            "DETEKSI DIMATIKAN\n\n"
+            "• Kamera & inferensi YOLO tidak berjalan\n"
+            "• Tidak ada update status ke DB\n"
+            "• Tidak ada notifikasi Telegram\n\n"
+            "Tekan START untuk menjalankan kembali"
+        )
 
     def set_normal(self):
         self.badge.setText("✅  NORMAL")
@@ -92,14 +121,14 @@ class StatusPanel(QtWidgets.QFrame):
             "TANAMAN AMAN\n\n"
             "• Monitoring kamera aktif\n"
             "• Sistem nutrisi berjalan normal\n"
-            "• Tidak ada tanaman mati terdeteksi"
+            "• Tidak ada malnutrisi terdeteksi"
         )
 
-    def set_alert(self):
-        self.badge.setText("⚠️  ALERT")
+    def set_malnutrisi(self):
+        self.badge.setText("⚠️  MALNUTRISI")
         self.badge.setStyleSheet("""
             QLabel {
-                font-size: 34px;
+                font-size: 30px;
                 font-weight: 900;
                 padding: 18px;
                 border-radius: 16px;
@@ -116,10 +145,39 @@ class StatusPanel(QtWidgets.QFrame):
             }
         """)
         self.detail.setText(
-            "TERDETEKSI TANAMAN MATI\n\n"
+            "TERDETEKSI MALNUTRISI\n\n"
             "Segera lakukan tindakan:\n"
             "1. Cek pompa air (hidupkan)\n"
             "2. Cek pompa nutrisi (hidupkan)\n"
             "3. Periksa aliran air ke tanaman\n\n"
             "Notifikasi Telegram telah dikirim"
+        )
+
+    def set_no_plant(self):
+        self.badge.setText("ℹ️  TIDAK ADA TANAMAN\nTERDETEKSI")
+        self.badge.setStyleSheet("""
+            QLabel {
+                font-size: 24px;
+                font-weight: 900;
+                padding: 18px;
+                border-radius: 16px;
+                background: #dbeafe;
+                color: #1e3a8a;
+            }
+        """)
+        self.detail.setStyleSheet("""
+            QLabel {
+                font-size: 18px;
+                font-weight: 800;
+                color: #1e3a8a;
+                line-height: 1.7;
+            }
+        """)
+        self.detail.setText(
+            "TIDAK ADA OBJEK TANAMAN\n\n"
+            "Kemungkinan penyebab:\n"
+            "• Kamera tidak mengarah ke tanaman\n"
+            "• Tanaman di luar frame\n"
+            "• Pencahayaan terlalu gelap/terlalu terang\n"
+            "• Model belum mengenali kelas tanaman pada kondisi ini"
         )

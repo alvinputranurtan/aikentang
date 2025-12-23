@@ -1,3 +1,4 @@
+# main.py
 import sys
 import time
 from PyQt5 import QtWidgets, QtCore
@@ -25,6 +26,9 @@ class MainWindow(QtWidgets.QWidget):
         self._connect_signals()
 
         self.log(f"[ENV] DEVICE_ID={cfg.DEVICE_ID}, DB={cfg.DB_HOST}/{cfg.DB_NAME}, TG={cfg.telegram_enabled()}")
+
+        # ✅ Auto start when app opens
+        QtCore.QTimer.singleShot(200, self.start)
 
     # ---------- UI ----------
     def _build_ui(self):
@@ -79,6 +83,9 @@ class MainWindow(QtWidgets.QWidget):
 
         self._set_running(False)
 
+        # default status at boot
+        self.status_panel.set_stopped()
+
     def _connect_signals(self):
         self.btn_start.clicked.connect(self.start)
         self.btn_stop.clicked.connect(self.stop)
@@ -105,12 +112,13 @@ class MainWindow(QtWidgets.QWidget):
             self.log(f"[INFO] Model loaded (umur={self.umur.value()} hari)")
         except Exception as e:
             self.log(f"[ERR] Failed to load model: {e}")
+            self.status_panel.set_stopped()
             return
 
         self.worker = VideoWorker(self.cfg, model, self.tg)
         self.worker.frame_updated.connect(self.video.setImage)
         self.worker.log_signal.connect(self.log)
-        self.worker.alert_signal.connect(self.on_alert)
+        self.worker.status_signal.connect(self.on_status)
 
         self._set_running(True)
         self.worker.start()
@@ -125,10 +133,15 @@ class MainWindow(QtWidgets.QWidget):
 
         self._set_running(False)
         self.log("[INFO] Stopped.")
+        self.status_panel.set_stopped()
 
-    def on_alert(self, is_alert: bool):
-        if is_alert:
-            self.status_panel.set_alert()
+    def on_status(self, status: str):
+        if status == "malnutrisi":
+            self.status_panel.set_malnutrisi()
+        elif status == "no_plant":
+            self.status_panel.set_no_plant()
+        elif status == "stopped":
+            self.status_panel.set_stopped()
         else:
             self.status_panel.set_normal()
 
