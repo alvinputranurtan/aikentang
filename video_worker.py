@@ -32,23 +32,56 @@ def build_csi_gstreamer_pipeline(width=1920, height=1080, fps=30, flip_method=0)
 
 def _draw_label_box(img, xyxy, label, conf):
     """
-    Draw a simple labeled box.
-    NOTE: We avoid fixed fancy colors; use a deterministic color derived from label.
+    Rules:
+      - label == 'malnutrisi'  -> bounding box RED
+      - else                  -> bounding box GREEN
+
+    Font made bigger as requested.
     """
     x1, y1, x2, y2 = [int(v) for v in xyxy]
-    # deterministic "color" from label
-    h = abs(hash(label)) % 255
-    color = (h, 255 - h, (h * 2) % 255)
 
-    cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+    # colors (BGR)
+    if label.lower() == "malnutrisi":
+        color = (0, 0, 255)   # red
+    else:
+        color = (0, 255, 0)   # green
 
-    text = f"{label} {conf:.2f}"
-    (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-    y_text = max(0, y1 - th - 8)
+    # thicker box
+    box_thickness = 4
+    cv2.rectangle(img, (x1, y1), (x2, y2), color, box_thickness)
 
-    cv2.rectangle(img, (x1, y_text), (x1 + tw + 10, y_text + th + 8), color, -1)
-    cv2.putText(img, text, (x1 + 5, y_text + th + 3),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2, cv2.LINE_AA)
+    # bigger font
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 1.2
+    text_thickness = 3
+
+    text = f"{label.upper()} {conf:.2f}"
+    (tw, th), baseline = cv2.getTextSize(text, font, font_scale, text_thickness)
+
+    # label background box
+    pad_x, pad_y = 8, 6
+    y_text_top = max(0, y1 - th - baseline - (pad_y * 2))
+    x_text_left = max(0, x1)
+
+    cv2.rectangle(
+        img,
+        (x_text_left, y_text_top),
+        (x_text_left + tw + (pad_x * 2), y_text_top + th + baseline + (pad_y * 2)),
+        color,
+        -1,
+    )
+
+    # text in black for contrast
+    cv2.putText(
+        img,
+        text,
+        (x_text_left + pad_x, y_text_top + th + pad_y),
+        font,
+        font_scale,
+        (0, 0, 0),
+        text_thickness,
+        cv2.LINE_AA,
+    )
 
 
 class VideoWorker(QtCore.QThread):
@@ -115,7 +148,10 @@ class VideoWorker(QtCore.QThread):
     def _open_camera(self):
         cap = self._open_csi()
         if cap is not None:
-            self._log(f"[CAM] CSI opened: {self.cam_width}x{self.cam_height}@{self.cam_fps} (flip={self.csi_flip_method})")
+            self._log(
+                f"[CAM] CSI opened: {self.cam_width}x{self.cam_height}@{self.cam_fps} "
+                f"(flip={self.csi_flip_method})"
+            )
             return cap, "csi"
 
         self._log("[CAM] CSI open failed.")
@@ -191,10 +227,10 @@ class VideoWorker(QtCore.QThread):
             results = self.model.predict(frame, verbose=False)
             r0 = results[0]
 
-            # Start annotated as a copy of the frame
+            # Annotated as a copy of frame
             annotated = frame.copy()
 
-            # ---- detect "no plant" ----
+            # ---- no plant ----
             has_boxes = (r0.boxes is not None) and (len(r0.boxes) > 0)
             if not has_boxes:
                 self._emit_status("no_plant")
@@ -208,7 +244,7 @@ class VideoWorker(QtCore.QThread):
                 time.sleep(0.01)
                 continue
 
-            # Draw boxes manually, and rename "dead" -> "malnutrisi" on overlay
+            # ---- draw boxes + dead detection ----
             cls_ids = r0.boxes.cls.cpu().numpy().astype(int)
             confs = r0.boxes.conf.cpu().numpy()
             xyxys = r0.boxes.xyxy.cpu().numpy()
@@ -222,7 +258,7 @@ class VideoWorker(QtCore.QThread):
 
                 overlay_label = name
                 if name == self.cfg.DEAD_CLASS_NAME:
-                    overlay_label = "malnutrisi"  # ✅ change label in video overlay
+                    overlay_label = "malnutrisi"
 
                 _draw_label_box(annotated, xyxy, overlay_label, cf)
 
@@ -270,7 +306,7 @@ class VideoWorker(QtCore.QThread):
                         queued = self.tg.enqueue_photo(buf.tobytes(), caption)
                         self._log("[TG] queued snapshot" if queued else "[TG] queue full, skip")
 
-            # if not malnutrisi state and plants exist -> normal
+            # plants exist + not in malnutrisi state => normal
             if not self.dead_state:
                 self._emit_status("normal")
 
