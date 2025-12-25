@@ -50,120 +50,110 @@ class StatusPanel(QtWidgets.QFrame):
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(16)
 
+        # ===== TITLE =====
         self.title = QtWidgets.QLabel("STATUS TANAMAN")
         self.title.setAlignment(QtCore.Qt.AlignCenter)
         self.title.setStyleSheet("font-size:20px; font-weight:900; color:#111827;")
+        self.title.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
         layout.addWidget(self.title)
 
-        # BADGE: kunci tinggi supaya UI tidak berubah-ubah
+        # ===== BADGE (FIXED HEIGHT) =====
         self.badge = QtWidgets.QLabel("")
         self.badge.setAlignment(QtCore.Qt.AlignCenter)
-        self.badge.setTextFormat(QtCore.Qt.PlainText)
-        self.badge.setWordWrap(True)
-
-        # KUNCI TINGGI BADGE (ubah sesuai selera)
-        self.badge.setFixedHeight(110)
-
-        # SizePolicy: tinggi fixed, lebar boleh expand
+        self.badge.setWordWrap(True)  # penting untuk teks panjang / multiline
+        self.badge.setMinimumHeight(110)
+        self.badge.setMaximumHeight(110)  # kunci tinggi supaya tidak berubah-ubah
         self.badge.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
-
         layout.addWidget(self.badge)
 
-        # DETAIL: biar panel stabil, kasih minimum height + fixed policy
+        # ===== DETAIL (SCROLLABLE, NEVER CUT OFF) =====
         self.detail = QtWidgets.QLabel("")
         self.detail.setWordWrap(True)
         self.detail.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
+        self.detail.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
 
-        # KUNCI AREA DETAIL biar gak loncat (ubah sesuai selera)
-        self.detail.setMinimumHeight(240)
-        self.detail.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        self.detail_scroll = QtWidgets.QScrollArea()
+        self.detail_scroll.setWidgetResizable(True)
+        self.detail_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self.detail_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.detail_scroll.setWidget(self.detail)
+        self.detail_scroll.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        self.detail_scroll.setMinimumHeight(220)  # biar “tidak ada tanaman” nyaman dibaca
 
-        layout.addWidget(self.detail)
-
-        layout.addStretch(1)
+        layout.addWidget(self.detail_scroll)
 
         self.set_stopped()
 
-    # ======================
-    # Helpers style generator
-    # ======================
-    def _set_badge(self, text: str, bg: str, fg: str, font_size: int = 30):
-        # Catatan: font_size bisa kamu samakan di semua status untuk paling stabil.
-        self.badge.setText(text)
+    # ===== Helpers: apply style without changing geometry =====
+    def _set_badge_style(self, font_px: int, bg: str, fg: str):
+        # line-height di Qt stylesheet tidak selalu konsisten, jadi fokus ke padding + fixed height
         self.badge.setStyleSheet(f"""
             QLabel {{
-                font-size: {font_size}px;
+                font-size: {font_px}px;
                 font-weight: 900;
-                padding: 18px;
+                padding: 14px;
                 border-radius: 16px;
                 background: {bg};
                 color: {fg};
             }}
         """)
 
-    def _set_detail(self, text: str, color: str, font_size: int = 18, weight: int = 800):
-        self.detail.setText(text)
+    def _set_detail_style(self, font_px: int, fg: str, weight: int = 800):
         self.detail.setStyleSheet(f"""
             QLabel {{
-                font-size: {font_size}px;
+                font-size: {font_px}px;
                 font-weight: {weight};
-                color: {color};
-                line-height: 1.7;
+                color: {fg};
             }}
         """)
 
-    # ==========
-    # States
-    # ==========
+    # ===== States =====
     def set_stopped(self):
-        self._set_badge("⏹️  MODEL BERHENTI", bg="#e5e7eb", fg="#111827", font_size=28)
-        self._set_detail(
+        self.badge.setText("⏹️  MODEL BERHENTI")
+        self._set_badge_style(font_px=26, bg="#e5e7eb", fg="#111827")
+        self._set_detail_style(font_px=18, fg="#111827", weight=800)
+        self.detail.setText(
             "DETEKSI DIMATIKAN\n\n"
             "• Kamera & inferensi YOLO tidak berjalan\n"
             "• Tidak ada update status ke DB\n"
             "• Tidak ada notifikasi Telegram\n\n"
-            "Tekan START untuk menjalankan kembali",
-            color="#111827",
-            font_size=18,
-            weight=800
+            "Tekan START untuk menjalankan kembali"
         )
 
     def set_normal(self):
-        self._set_badge("✅  NORMAL", bg="#dcfce7", fg="#14532d", font_size=30)
-        self._set_detail(
+        self.badge.setText("✅  NORMAL")
+        self._set_badge_style(font_px=32, bg="#dcfce7", fg="#14532d")
+        self._set_detail_style(font_px=20, fg="#14532d", weight=800)
+        self.detail.setText(
             "TANAMAN AMAN\n\n"
             "• Monitoring kamera aktif\n"
             "• Sistem nutrisi berjalan normal\n"
-            "• Tidak ada malnutrisi terdeteksi",
-            color="#14532d",
-            font_size=20,
-            weight=800
+            "• Tidak ada malnutrisi terdeteksi"
         )
 
     def set_malnutrisi(self):
-        self._set_badge("⚠️  MALNUTRISI", bg="#fee2e2", fg="#7f1d1d", font_size=30)
-        self._set_detail(
+        self.badge.setText("⚠️  MALNUTRISI")
+        self._set_badge_style(font_px=30, bg="#fee2e2", fg="#7f1d1d")
+        self._set_detail_style(font_px=20, fg="#7f1d1d", weight=900)
+        self.detail.setText(
             "TERDETEKSI MALNUTRISI\n\n"
             "Segera lakukan tindakan:\n"
             "1. Cek pompa air (hidupkan)\n"
             "2. Cek pompa nutrisi (hidupkan)\n"
             "3. Periksa aliran air ke tanaman\n\n"
-            "Notifikasi Telegram telah dikirim",
-            color="#7f1d1d",
-            font_size=20,
-            weight=900
+            "Notifikasi Telegram telah dikirim"
         )
 
     def set_no_plant(self):
-        self._set_badge("ℹ️  TIDAK ADA TANAMAN\nTERDETEKSI", bg="#dbeafe", fg="#1e3a8a", font_size=26)
-        self._set_detail(
+        # badge tetap fixed height, tapi teks panjang aman karena wordWrap aktif
+        self.badge.setText("ℹ️  TIDAK ADA TANAMAN\nTERDETEKSI")
+        self._set_badge_style(font_px=24, bg="#dbeafe", fg="#1e3a8a")
+        self._set_detail_style(font_px=18, fg="#1e3a8a", weight=800)
+        self.detail.setText(
             "TIDAK ADA OBJEK TANAMAN\n\n"
             "Kemungkinan penyebab:\n"
             "• Kamera tidak mengarah ke tanaman\n"
             "• Tanaman di luar frame\n"
             "• Pencahayaan terlalu gelap/terlalu terang\n"
-            "• Model belum mengenali kelas tanaman pada kondisi ini",
-            color="#1e3a8a",
-            font_size=18,
-            weight=800
+            "• Model belum mengenali kelas tanaman pada kondisi ini"
         )
