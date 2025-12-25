@@ -110,7 +110,7 @@ class StatusPanel(QtWidgets.QFrame):
     # ===== States =====
     def set_stopped(self):
         self.badge.setText("⏹️  MODEL BERHENTI")
-        self._set_badge_style(font_px=26, bg="#e5e7eb", fg="#111827")
+        self._set_badge_style(font_px=26, bg="#ffffff", fg="#111827")
         self._set_detail_style(font_px=18, fg="#111827", weight=800)
         self.detail.setText(
             "DETEKSI DIMATIKAN\n\n"
@@ -122,7 +122,7 @@ class StatusPanel(QtWidgets.QFrame):
 
     def set_normal(self):
         self.badge.setText("✅  NORMAL")
-        self._set_badge_style(font_px=32, bg="#dcfce7", fg="#14532d")
+        self._set_badge_style(font_px=32, bg="#ffffff", fg="#14532d")
         self._set_detail_style(font_px=20, fg="#14532d", weight=800)
         self.detail.setText(
             "TANAMAN AMAN\n\n"
@@ -133,7 +133,7 @@ class StatusPanel(QtWidgets.QFrame):
 
     def set_malnutrisi(self):
         self.badge.setText("⚠️  MALNUTRISI")
-        self._set_badge_style(font_px=30, bg="#fee2e2", fg="#7f1d1d")
+        self._set_badge_style(font_px=30, bg="#ffffff", fg="#7f1d1d")
         self._set_detail_style(font_px=20, fg="#7f1d1d", weight=900)
         self.detail.setText(
             "TERDETEKSI MALNUTRISI\n\n"
