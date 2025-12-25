@@ -55,129 +55,115 @@ class StatusPanel(QtWidgets.QFrame):
         self.title.setStyleSheet("font-size:20px; font-weight:900; color:#111827;")
         layout.addWidget(self.title)
 
+        # BADGE: kunci tinggi supaya UI tidak berubah-ubah
         self.badge = QtWidgets.QLabel("")
         self.badge.setAlignment(QtCore.Qt.AlignCenter)
-        self.badge.setMinimumHeight(80)
+        self.badge.setTextFormat(QtCore.Qt.PlainText)
+        self.badge.setWordWrap(True)
+
+        # KUNCI TINGGI BADGE (ubah sesuai selera)
+        self.badge.setFixedHeight(110)
+
+        # SizePolicy: tinggi fixed, lebar boleh expand
+        self.badge.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+
         layout.addWidget(self.badge)
 
+        # DETAIL: biar panel stabil, kasih minimum height + fixed policy
         self.detail = QtWidgets.QLabel("")
         self.detail.setWordWrap(True)
         self.detail.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
+
+        # KUNCI AREA DETAIL biar gak loncat (ubah sesuai selera)
+        self.detail.setMinimumHeight(240)
+        self.detail.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+
         layout.addWidget(self.detail)
 
         layout.addStretch(1)
 
         self.set_stopped()
 
-    def set_stopped(self):
-        self.badge.setText("⏹️  MODEL BERHENTI")
-        self.badge.setStyleSheet("""
-            QLabel {
-                font-size: 28px;
+    # ======================
+    # Helpers style generator
+    # ======================
+    def _set_badge(self, text: str, bg: str, fg: str, font_size: int = 30):
+        # Catatan: font_size bisa kamu samakan di semua status untuk paling stabil.
+        self.badge.setText(text)
+        self.badge.setStyleSheet(f"""
+            QLabel {{
+                font-size: {font_size}px;
                 font-weight: 900;
                 padding: 18px;
                 border-radius: 16px;
-                background: #e5e7eb;
-                color: #111827;
-            }
+                background: {bg};
+                color: {fg};
+            }}
         """)
-        self.detail.setStyleSheet("""
-            QLabel {
-                font-size: 18px;
-                font-weight: 800;
-                color: #111827;
+
+    def _set_detail(self, text: str, color: str, font_size: int = 18, weight: int = 800):
+        self.detail.setText(text)
+        self.detail.setStyleSheet(f"""
+            QLabel {{
+                font-size: {font_size}px;
+                font-weight: {weight};
+                color: {color};
                 line-height: 1.7;
-            }
+            }}
         """)
-        self.detail.setText(
+
+    # ==========
+    # States
+    # ==========
+    def set_stopped(self):
+        self._set_badge("⏹️  MODEL BERHENTI", bg="#e5e7eb", fg="#111827", font_size=28)
+        self._set_detail(
             "DETEKSI DIMATIKAN\n\n"
             "• Kamera & inferensi YOLO tidak berjalan\n"
             "• Tidak ada update status ke DB\n"
             "• Tidak ada notifikasi Telegram\n\n"
-            "Tekan START untuk menjalankan kembali"
+            "Tekan START untuk menjalankan kembali",
+            color="#111827",
+            font_size=18,
+            weight=800
         )
 
     def set_normal(self):
-        self.badge.setText("✅  NORMAL")
-        self.badge.setStyleSheet("""
-            QLabel {
-                font-size: 34px;
-                font-weight: 900;
-                padding: 18px;
-                border-radius: 16px;
-                background: #dcfce7;
-                color: #14532d;
-            }
-        """)
-        self.detail.setStyleSheet("""
-            QLabel {
-                font-size: 20px;
-                font-weight: 800;
-                color: #14532d;
-                line-height: 1.7;
-            }
-        """)
-        self.detail.setText(
+        self._set_badge("✅  NORMAL", bg="#dcfce7", fg="#14532d", font_size=30)
+        self._set_detail(
             "TANAMAN AMAN\n\n"
             "• Monitoring kamera aktif\n"
             "• Sistem nutrisi berjalan normal\n"
-            "• Tidak ada malnutrisi terdeteksi"
+            "• Tidak ada malnutrisi terdeteksi",
+            color="#14532d",
+            font_size=20,
+            weight=800
         )
 
     def set_malnutrisi(self):
-        self.badge.setText("⚠️  MALNUTRISI")
-        self.badge.setStyleSheet("""
-            QLabel {
-                font-size: 30px;
-                font-weight: 900;
-                padding: 18px;
-                border-radius: 16px;
-                background: #fee2e2;
-                color: #7f1d1d;
-            }
-        """)
-        self.detail.setStyleSheet("""
-            QLabel {
-                font-size: 20px;
-                font-weight: 900;
-                color: #7f1d1d;
-                line-height: 1.7;
-            }
-        """)
-        self.detail.setText(
+        self._set_badge("⚠️  MALNUTRISI", bg="#fee2e2", fg="#7f1d1d", font_size=30)
+        self._set_detail(
             "TERDETEKSI MALNUTRISI\n\n"
             "Segera lakukan tindakan:\n"
             "1. Cek pompa air (hidupkan)\n"
             "2. Cek pompa nutrisi (hidupkan)\n"
             "3. Periksa aliran air ke tanaman\n\n"
-            "Notifikasi Telegram telah dikirim"
+            "Notifikasi Telegram telah dikirim",
+            color="#7f1d1d",
+            font_size=20,
+            weight=900
         )
 
     def set_no_plant(self):
-        self.badge.setText("ℹ️  TIDAK ADA TANAMAN\nTERDETEKSI")
-        self.badge.setStyleSheet("""
-            QLabel {
-                font-size: 24px;
-                font-weight: 900;
-                padding: 18px;
-                border-radius: 16px;
-                background: #dbeafe;
-                color: #1e3a8a;
-            }
-        """)
-        self.detail.setStyleSheet("""
-            QLabel {
-                font-size: 18px;
-                font-weight: 800;
-                color: #1e3a8a;
-                line-height: 1.7;
-            }
-        """)
-        self.detail.setText(
+        self._set_badge("ℹ️  TIDAK ADA TANAMAN\nTERDETEKSI", bg="#dbeafe", fg="#1e3a8a", font_size=26)
+        self._set_detail(
             "TIDAK ADA OBJEK TANAMAN\n\n"
             "Kemungkinan penyebab:\n"
             "• Kamera tidak mengarah ke tanaman\n"
             "• Tanaman di luar frame\n"
             "• Pencahayaan terlalu gelap/terlalu terang\n"
-            "• Model belum mengenali kelas tanaman pada kondisi ini"
+            "• Model belum mengenali kelas tanaman pada kondisi ini",
+            color="#1e3a8a",
+            font_size=18,
+            weight=800
         )
