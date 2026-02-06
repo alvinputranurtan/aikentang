@@ -257,12 +257,14 @@ class VideoWorker(QtCore.QThread):
                 cf = float(cf)
 
                 overlay_label = name
-                if name == self.cfg.DEAD_CLASS_NAME:
+                # treat both configured DEAD_CLASS_NAME and explicit 'layu' as dead-like
+                is_dead_like = (name == self.cfg.DEAD_CLASS_NAME) or (name.lower() == "layu")
+                if is_dead_like:
                     overlay_label = "malnutrisi"
 
                 _draw_label_box(annotated, xyxy, overlay_label, cf)
 
-                if name == self.cfg.DEAD_CLASS_NAME and cf >= self.cfg.DEAD_CONF:
+                if is_dead_like and cf >= self.cfg.DEAD_CONF:
                     dead_detected = True
                     best_dead_conf = max(best_dead_conf, cf)
 
