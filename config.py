@@ -13,10 +13,16 @@ class AppConfig:
     DB_PASS: str = os.getenv("DB_PASS", "")
     DB_PORT: int = int(os.getenv("DB_PORT", "3306"))
     DEVICE_ID: int = int(os.getenv("DEVICE_ID", "3"))
+    # Optional separate write DB (falls back to DB_*)
+    DB_WRITE_HOST: str = os.getenv("DB_WRITE_HOST", "")
+    DB_WRITE_NAME: str = os.getenv("DB_WRITE_NAME", "")
+    DB_WRITE_USER: str = os.getenv("DB_WRITE_USER", "")
+    DB_WRITE_PASS: str = os.getenv("DB_WRITE_PASS", "")
+    DB_WRITE_PORT: int = int(os.getenv("DB_WRITE_PORT", os.getenv("DB_PORT", "3306")))
 
     # Model
-    PATH_MODEL_1: str = os.getenv("PATH_MODEL_1", "model_1.pt")
-    PATH_MODEL_2: str = os.getenv("PATH_MODEL_2", "model_2.pt")
+    PATH_MODEL_1: str = os.getenv("PATH_MODEL_1", "best.pt")
+    PATH_MODEL_2: str = os.getenv("PATH_MODEL_2", "model_1.pt")
     MODEL_AGE_SWITCH_DAYS: int = int(os.getenv("MODEL_AGE_SWITCH_DAYS", "15"))
 
     # Detection

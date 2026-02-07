@@ -6,7 +6,7 @@ from PyQt5 import QtCore, QtGui
 from ultralytics import YOLO
 
 from config import AppConfig
-from db_client import get_threshold, set_current
+from db_client import get_threshold, set_current, log_malnutrisi
 from telegram_sender import TelegramSender
 
 
@@ -289,6 +289,13 @@ class VideoWorker(QtCore.QThread):
                     try:
                         affected = set_current(self.cfg, self.cfg.DEVICE_ID, 0, 0, 0)
                         self._log(f"[DB] MALNUTRISI(trigger by DEAD) -> set current=0 (affected={affected})")
+                        # Log malnutrisi event to pump_nutrisi_log (use configured DEVICE_ID)
+                        try:
+                            rowid = log_malnutrisi(self.cfg, self.cfg.DEVICE_ID)
+                            self._log(f"[DB] MALNUTRISI logged -> pump_nutrisi_log id={rowid}")
+                        except Exception as e:
+                            self._log(f"[DB] ERROR logging malnutrisi: {e}")
+
                         self.last_db_update_ts = now
                     except Exception as e:
                         self._log(f"[DB] ERROR set current=0: {e}")

@@ -2,16 +2,34 @@ import pymysql
 from typing import Dict
 from config import AppConfig
 
-def _connect(cfg: AppConfig):
-    return pymysql.connect(
-        host=cfg.DB_HOST,
-        user=cfg.DB_USER,
-        password=cfg.DB_PASS,
-        database=cfg.DB_NAME,
-        port=cfg.DB_PORT,
-        autocommit=True,
-        cursorclass=pymysql.cursors.DictCursor,
-    )
+def _connect(cfg: AppConfig, database: str = None, use_write_creds: bool = False):
+  """Create a DB connection.
+
+  If `database` provided, use it. If `use_write_creds` is True, use the
+  DB_WRITE_* credentials from cfg (falling back to DB_* when empty).
+  """
+  if use_write_creds:
+    host = cfg.DB_WRITE_HOST or cfg.DB_HOST
+    user = cfg.DB_WRITE_USER or cfg.DB_USER
+    password = cfg.DB_WRITE_PASS or cfg.DB_PASS
+    port = cfg.DB_WRITE_PORT or cfg.DB_PORT
+    db = database or cfg.DB_WRITE_NAME or cfg.DB_NAME
+  else:
+    host = cfg.DB_HOST
+    user = cfg.DB_USER
+    password = cfg.DB_PASS
+    port = cfg.DB_PORT
+    db = database or cfg.DB_NAME
+
+  return pymysql.connect(
+    host=host,
+    user=user,
+    password=password,
+    database=db,
+    port=port,
+    autocommit=True,
+    cursorclass=pymysql.cursors.DictCursor,
+  )
 
 def get_threshold(cfg: AppConfig, device_id: int) -> Dict[str, int]:
     sql = """
@@ -61,5 +79,24 @@ def set_current(cfg: AppConfig, device_id: int, n: int, p: int, k: int) -> int:
         with conn.cursor() as cur:
             cur.execute(sql, (n, p, k, device_id))
             return cur.rowcount
+    finally:
+        conn.close()
+
+def log_malnutrisi(cfg: AppConfig, device_id: int, database: str = None) -> int:
+    """Insert a malnutrisi event timestamp into pump_nutrisi_log in given database.
+
+    If `database` is None the connection will use cfg.DB_NAME.
+    Returns last insert id.
+    """
+    sql = """
+    INSERT INTO pump_nutrisi_log (event_time, device)
+    VALUES (NOW(), %s);
+    """
+    # Use write credentials when logging events (safer to use a write-only user)
+    conn = _connect(cfg, database, use_write_creds=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, (device_id,))
+            return cur.lastrowid
     finally:
         conn.close()
